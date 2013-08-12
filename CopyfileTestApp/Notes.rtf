@@ -1,0 +1,313 @@
+{\rtf1\ansi\ansicpg1252\cocoartf1187\cocoasubrtf390
+{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww26600\viewh18720\viewkind0
+\pard\tx566\tx1133\tx1700\tx2267\tx2834\tx3401\tx3968\tx4535\tx5102\tx5669\tx6236\tx6803\pardirnatural
+
+\f0\fs24 \cf0 \
+\
+
+\b FILE COPY CALLBACK SEQUENCE
+\b0 \
+\
+	
+\b 1.
+\b0  Callback function is called with 
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_START
+\b0 .\
+		If the destination file doesn't already exist, at exit of the function call it's still not created/opened.\
+		If the destination file already exists, at the exit of this function call it's still not touched.\
+		
+\b Returning COPYFILE_CONTINUE:\
+			
+\b0 If a file has extended attributes, the operation continues with step 2 (
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_START
+\b0 , copying first extended attribute).\
+			If a file doesn't have extended attributes, the operation continues with step 4 (
+\b what= COPYFILE_COPY_DATA
+\b0  and 
+\b stage= COPYFILE_PROGRESS
+\b0 ) if file_size > 0, or with step 5 (
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 ) if file_size == 0.\
+			The operation continues with step 2 (
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_START
+\b0 , copying first extended attribute).\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			If the destination file doesn't already exist, it's not created.\
+			If the destination file already exists, it's unmodified.\
+			If a file is part of recursive directory coping and there are more files to copy, the operation continues with the next item (
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_START
+\b0  for a file, 
+\b what=COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_START
+\b0  for a directory).\
+			If a file is part of recursive directory coping and there are no more files to copy, the operations continues with cleaning the directory to which the file belonged to (
+\b what=COPYFILE_RECURSE_DIR_CLEANUP
+\b0  and 
+\b stage=COPYFILE_START
+\b0 ).\
+			If a file was the only one being copied, the copyfile() exits with return code 0, errno=0.\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			If the destination file doesn't already exist, it's not created.\
+			If the destination file already exists, it's unmodified.\
+			copyfile() exits with return code -1, errno=0. This happens even if a file is part of recursive directory coping and there are more files to copy. No more files will be copied further. Already copied files remain in their new destinations.\
+\
+	(Between step 1. and the next callback function call (step 2, 4 or 5) the destination file is created/opened if it didn't already exist. If it did exist, it's effectively replaced with the new file of zero length and cleared metadata).\
+\
+
+\b 	1a.
+\b0  Callback function is called with 
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage= COPYFILE_START
+\b0 .\
+		If the destination directory doesn't already exist, at exit of the function call it's still not created/opened.\
+		If the destination directory already exists, at the exit of this function call it's still not touched.\
+		
+\b Returning COPYFILE_CONTINUE:
+\b0 \
+			If a directory has extended attributes, the operation continues with step 2 (
+\b what= COPYFILE_COPY_XATTR
+\b0  and 
+\b stage=COPYFILE_START
+\b0 , copying first extended attribute).\
+			If a directory doesn't have extended attributes, the operation continues with step *** (
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage= COPYFILE_FINISH
+\b0 ).\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			If the destination directory doesn't already exist, it's not created.\
+			If the destination directory already exists, it's unmodified.\
+			The operation continues with step ***** (
+\b what= COPYFILE_RECURSE_DIR_CLEANUP
+\b0  and 
+\b stage=COPYFILE_START
+\b0 ).\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			If the destination directory doesn't already exist, it's not created.\
+			If the destination directory already exists, it's unmodified.\
+			copyfile() exits with return code -1, errno=0. This happens even if a directory is part of recursive directory coping and there are more files to copy. No more files will be copied further. Already copied files remain in their new destinations.\
+		\
+	(Between step 1a. and the next callback function call (step 2 or ***) the destination directory is created if it didn't already exist. If it did exist, it's effectively replaced with the new empty directory and cleared metadata).\
+\
+	
+\i \ul FOR_EACH_EXTENDED_ATTRIBUTE_START
+\i0 \ulnone \
+	
+\b 2
+\b0 . Callback function is called with 
+\b what=COPYFILE_COPY_XATTR
+\b0  and 
+\b stage=COPYFILE_START
+\b0 .\
+		
+\b Returning COPYFILE_CONTINUE:
+\b0 \
+			The operation continues with step 3 (
+\b what= COPYFILE_COPY_XATTR
+\b0  and 
+\b stage= COPYFILE_FINISH
+\b0 , finishing copying an extended attribute).\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			Copying of particular extended attribute is skipped. If there are more extended attributes to copy the execution continues with another step 2. If there are no more extended attributes to copy, the execution continues with step 4 for a file (starting copying data, 
+\b what=COPYFILE_COPY_DATA
+\b0  and 
+\b stage=COPYFILE_PROGRESS
+\b0 ), or step ***** for a directory (finishing copying directory, 
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 ).\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			Copying of all next extended attributes is skipped. Execution continues with with step 4. for a file (starting copying data, 
+\b what=COPYFILE_COPY_DATA
+\b0  and 
+\b stage=COPYFILE_PROGRESS
+\b0 ), or step ***** for a directory (finishing copying directory, 
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 ).\
+\
+	(Between 2. and 3. the appropriate extended attribute is copied to the destination file).\
+\
+	
+\b 3.
+\b0  Callback function is called with 
+\b what=COPYFILE_COPY_XATTR
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 .\
+		
+\b Returning COPYFILE_CONTINUE:
+\b0 \
+			f there are more extended attributes to copy the execution continues with another step 2. If there are no more extended attributes to copy, the execution continues with step 4 for a file (starting copying data, 
+\b what=COPYFILE_COPY_DATA
+\b0  and 
+\b stage=COPYFILE_PROGRESS
+\b0 ), or step ***** for a directory (finishing copying directory, 
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 ).\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			A particular extended attribute is copied. Same as COPYFILE_CONTINUE.\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			A particular extended attribute is copied. Copying of all next extended attributes is skipped. Execution continues with with step 4. for a file (starting copying data, 
+\b what=COPYFILE_COPY_DATA
+\b0  and 
+\b stage=COPYFILE_PROGRESS
+\b0 ), or step ***** for a directory (finishing copying directory, 
+\b what= COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 ).\
+	
+\i \ul FOR_EACH_EXTENDED_ATTRIBUTE_END
+\i0 \ulnone \
+\
+	
+\i \ul WHILE_MORE_FILE_DATA_START
+\i0 \ulnone \
+	
+\b 4.
+\b0  Callback function is called with 
+\b what=COPYFILE_COPY_DATA
+\b0  and 
+\b stage=COPYFILE_PROGRESS
+\b0 .\
+		
+\b Returning COPYFILE_CONTINUE:
+\b0 \
+			Data copied. Continues operation with step 4. (for more data) with step 5. (all data copied).\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			Data copied. Continues operation with step 4. (for more data) with step 5. (all data copied). Same as COPYFILE_CONTINUE.\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			Copying is cancelled! The destination file will be destroyed after this function call is exited.The operation continues with step 6 (
+\b what= COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage= COPYFILE_ERR
+\b0 , and error is set to 
+\b errno=ECANCELED
+\b0 .\
+	
+\i \ul WHILE_MORE_FILE_DATA_END
+\i0 \ulnone \
+\
+	
+\b 5.
+\b0  Callback function is called with 
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_FINISH
+\b0 . At exit of the function call the destination file is completely copied and closed.\
+		
+\b Returning COPYFILE_CONTINUE:
+\b0 \
+			Concludes copy operation.\
+			If a file is part of recursive directory coping and there are more files to copy, the operation continues with the next item (
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_START
+\b0  for a file, 
+\b what=COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_START
+\b0  for a directory).\
+			If a file is part of recursive directory coping and there are no more files to copy, the operations continues with cleaning the directory to which the file belonged to (
+\b what=COPYFILE_RECURSE_DIR_CLEANUP
+\b0  and 
+\b stage=COPYFILE_START
+\b0 ).\
+			If a file was the only one being copied, the copyfile() exits with return code 0, errno=0.\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			Concludes copy operation. Same as COPYFILE_CONTINUE.\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			Concludes copy operation. File is copied.\
+			copyfile() exits with return code -1, errno=0. This happens even if a file is part of recursive directory coping and there are more files to copy. No more files will be copied further. Already copied files remain in their new destinations.\
+\
+
+\b 	6.
+\b0  Called only in case of error, called with 
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_ERR
+\b0 . errno value indicates the error that happened.\
+		
+\b Returning COPYFILE_CONTINUE:
+\b0 \
+			If a file causing error is part of recursive directory coping and there are more files to copy, the operation continues with the next item (
+\b what=COPYFILE_RECURSE_FILE
+\b0  and 
+\b stage=COPYFILE_START
+\b0  for a file, 
+\b what=COPYFILE_RECURSE_DIR
+\b0  and 
+\b stage=COPYFILE_START
+\b0  for a directory).\
+			If a file is part of recursive directory coping and there are no more files to copy, the operations continues with cleaning the directory to which the file belonged to (
+\b what=COPYFILE_RECURSE_DIR_CLEANUP
+\b0  and 
+\b stage=COPYFILE_START
+\b0 ).\
+			If a file was the only one being copied, the copyfile() exits with return code 0, errno=0.\
+		
+\b Returning COPYFILE_SKIP:
+\b0 \
+			Same as COPYFILE_CONTINUE.\
+		
+\b Returning COPYFILE_QUIT:
+\b0 \
+			Concludes copy operation.\
+			copyfile() exits with return code -1, errno=ESRCH. This happens even if a file is part of recursive directory coping and there are more files to copy. No more files will be copied further. Already copied files remain in their new destinations.\
+\
+
+\b WHAT IF THE SOURCE AND THE DESTINATION FILES REPRESENT THE SAME FILE?\
+	
+\b0 This should not be done in prectice. Anyhow, here's what will happen in this case. After execution of the callback function call 1., since the original destination file existed, it will be effectively replaced with the new file of zero length and cleared metadata. But since that replaced file was also the source file and since it doesn't exist anymore, there's notingleft to copy and the operation continues with callback function call 5. Effectively, the result is the file with zero length and cleared extended attributes.\
+\
+
+\b WHAT IF THE DESTINATION FILE ALREADY EXISTS?\
+
+\b0 	First of all, using COPYFILE_EXCL in conduction with COPYFILE_RECURSIVE has no effect. The copyfile() will successfully overwrite already existing destination file and exit with return code 0.\
+	We have to test for the destination file existence (e.g. access(path, F_OK)) before any operation on destination file begins, that is in the callback function call step 1.\
+	If we discover the destination exists in callback function step 1. and try to set/change COPYFILE_STATE_DST_FILENAME of the passed copyfile_state_t object, it has no effect. The destination path doesn't change.\
+\
+}
