@@ -17,7 +17,7 @@
 #import "NTFileOperation.h"
 
 #define XATTR_MAXSIZE 67108864
-#define BIG_FILE_SIZE 4294967296
+#define BIG_FILE_SIZE 4294967295
 
 @interface NTFileOperation ()
 
@@ -58,30 +58,31 @@ int access_read(const char *path, struct stat *st)
     
     if (S_ISLNK(st->st_mode))
     {
+        // We can't use access() since it follows symlinks. We have to do all the work.
         uid_t userid = getuid();
         
         if (st->st_uid == userid)
             result = !((st->st_mode & S_IRUSR) == S_IRUSR);
-        
-        if (result != 0)
+        else
         {
+            result = -1;
+            
             uuid_t useruuid, groupuuid;
             gid_t groupid = getgid();
             
-            if ((mbr_uid_to_uuid(userid, useruuid) == 0) && (mbr_gid_to_uuid(groupid, groupuuid) == 0))
-            {
-                int is_member;
-                
-                if (mbr_check_membership(useruuid, groupuuid, &is_member) == 0)
-                {
-                    if (is_member)
-                        result = !((st->st_mode & S_IRGRP) == S_IRGRP);
-                }
-            }
+            int is_member = 0;
+            
+            if ((mbr_uid_to_uuid(userid, useruuid) == 0) && (mbr_gid_to_uuid(st->st_gid, groupuuid) == 0))
+                mbr_check_membership(useruuid, groupuuid, &is_member);
+            
+            if (st->st_gid == groupid || is_member)
+                result = !((st->st_mode & S_IRGRP) == S_IRGRP);
+            else
+                result = !((st->st_mode & S_IROTH) == S_IROTH);
         }
         
         if (result != 0)
-            result = !((st->st_mode & S_IROTH) == S_IROTH);
+            errno = EACCES;
     }
     else
         result = access(path, _READ_OK | _REXT_OK);
@@ -97,35 +98,44 @@ int access_delete(const char *path, struct stat *st)
     {
         // We can't use access() since it follows symlinks. We have to do all the work.
         
-        // WHAT ABOUT IF A SYMLINK IS LOCKED????
-        
-        // First, the parent folder must allow for removing of files/subidrectories.
-        char *parent_path = dirname((char *)path);
-        result = access(path, _RMFILE_OK);
+        // First check it it's locked.
+        result = st->st_flags & UF_IMMUTABLE;
         
         if (result == 0)
         {
-            // In addition, if the parent folder has 'sticky bit' set, either the parent folder or the symlink (or both) must be owned by the current user.
-            struct stat prst;
+            // Not locked. The parent folder must allow for removing of files/subidrectories.
+            char *parent_path = dirname((char *)path);
+            result = access(path, _RMFILE_OK);
             
-            if (lstat(parent_path, &prst) == 0)
+            if (result == 0)
             {
-                if ((prst.st_mode & S_ISVTX) != 0)
+                // In addition, if the parent folder has 'sticky bit' set, either the parent folder or the symlink (or both) must be owned by the current user.
+                struct stat prst;
+                
+                if (lstat(parent_path, &prst) == 0)
                 {
-                    result = -1;
-                    errno = EACCES;
-                    
-                    uid_t userid = getuid();
-                    
-                    if ((prst.st_uid == userid) || (st->st_uid == userid))
+                    if ((prst.st_mode & S_ISVTX) != 0)
                     {
-                        result = 0;
-                        errno = 0;
+                        result = -1;
+                        errno = EACCES;
+                        
+                        uid_t userid = getuid();
+                        
+                        if ((prst.st_uid == userid) || (st->st_uid == userid))
+                        {
+                            result = 0;
+                            errno = 0;
+                        }
                     }
                 }
+                else
+                    result = -1;
             }
-            else
-                result = -1;
+        }
+        else
+        {
+            result = -1;
+            errno = EPERM;
         }
     }
     else if (S_ISDIR(st->st_mode))
@@ -133,7 +143,7 @@ int access_delete(const char *path, struct stat *st)
         // Test if dir hierarchy is deletable.
         char *paths[] = { (char *)path, 0 };
         
-        FTS *tree = fts_open(paths, FTS_NOCHDIR, 0);
+        FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
         
         if (tree)
         {
@@ -141,17 +151,20 @@ int access_delete(const char *path, struct stat *st)
             
             while ((result == 0) && (node = fts_read(tree)))
             {
-                if ((node->fts_info == FTS_ERR) || (node->fts_info == FTS_DNR) || (node->fts_info == FTS_NS))
-                    result = -1;
-                else if ((node->fts_info == FTS_DC) || (node->fts_info == FTS_INIT) || (node->fts_info == FTS_NSOK))
+                if (node->fts_info != FTS_DP)
                 {
-                    result = -1;
-                    errno = EBADF;
+                    if (node->fts_info == FTS_ERR || node->fts_info == FTS_DNR || node->fts_info == FTS_NS)
+                        result = -1;
+                    else if (node->fts_info == FTS_DC || node->fts_info == FTS_INIT || node->fts_info == FTS_NSOK)
+                    {
+                        result = -1;
+                        errno = EBADF;
+                    }
+                    else if (node->fts_info == FTS_SL || node->fts_info == FTS_SLNONE)
+                        result = access_delete(node->fts_path, node->fts_statp);
+                    else
+                        result = access(node->fts_path, _DELETE_OK);
                 }
-                else if ((node->fts_info == FTS_SL) || (node->fts_info == FTS_SLNONE))
-                    result = access_delete(node->fts_path, node->fts_statp);
-                else
-                    result = access(node->fts_path, _DELETE_OK);
             }
             
             fts_close(tree);
@@ -173,35 +186,44 @@ int access_move(const char *path, struct stat *st)
     {
         // We can't use access() since it follows symlinks. We have to do all the work.
         
-        // WHAT ABOUT IF A SYMLINK IS LOCKED????
-        
-        // First, the parent folder must allow for removing of files/subidrectories.
-        char *parent_path = dirname((char *)path);
-        result = access(path, _RMFILE_OK);
+        // First check it it's locked.
+        result = st->st_flags & UF_IMMUTABLE;
         
         if (result == 0)
         {
-            // In addition, if the parent folder has 'sticky bit' set, either the parent folder or the symlink (or both) must be owned by the current user.
-            struct stat prst;
+            // Not locked. The parent folder must allow for removing of files/subidrectories.
+            char *parent_path = dirname((char *)path);
+            result = access(path, _RMFILE_OK);
             
-            if (lstat(parent_path, &prst) == 0)
+            if (result == 0)
             {
-                if ((prst.st_mode & S_ISVTX) != 0)
+                // In addition, if the parent folder has 'sticky bit' set, either the parent folder or the symlink (or both) must be owned by the current user.
+                struct stat prst;
+                
+                if (lstat(parent_path, &prst) == 0)
                 {
-                    result = -1;
-                    errno = EACCES;
-                    
-                    uid_t userid = getuid();
-                    
-                    if ((prst.st_uid == userid) || (st->st_uid == userid))
+                    if ((prst.st_mode & S_ISVTX) != 0)
                     {
-                        result = 0;
-                        errno = 0;
+                        result = -1;
+                        errno = EACCES;
+                        
+                        uid_t userid = getuid();
+                        
+                        if ((prst.st_uid == userid) || (st->st_uid == userid))
+                        {
+                            result = 0;
+                            errno = 0;
+                        }
                     }
                 }
+                else
+                    result = -1;
             }
-            else
-                result = -1;
+        }
+        else
+        {
+            result = -1;
+            errno = EPERM;
         }
     }
     else if (S_ISDIR(st->st_mode))
@@ -348,8 +370,9 @@ BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *
     
     op_status *status = (op_status *)ctx;
     NTFileOperation *operation = (NTFileOperation *)status->operation;
+    SEL delegateMethod = @selector(fileOperation:shouldProceedOnProgressInfo:);
     
-    if ([[operation delegate] respondsToSelector:@selector(fileOperation:shouldProceedOnProgressInfo:)])
+    if ([[operation delegate] respondsToSelector:delegateMethod])
     {
         if (status->enabled)
         {
@@ -391,7 +414,7 @@ BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *
                 }
                 @catch (NSException *e)
                 {
-                    NSLog(@"-[%@ fileOperation:shouldProceedOnProgressInfo:] exception (calling queue): %@", NSStringFromClass([operation class]), e);
+                    NSLog(@"-[%@ %@] exception (calling queue): %@", NSStringFromClass([operation class]), NSStringFromSelector(delegateMethod), e);
                 }
             });
             
@@ -411,7 +434,7 @@ BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *
                 }
                 @catch (NSException *e)
                 {
-                    NSLog(@"-[%@ fileOperation:shouldProceedOnProgressInfo:] exception (timer event queue): %@", NSStringFromClass([operation class]), e);
+                    NSLog(@"-[%@ %@] exception (timer event queue): %@", NSStringFromClass([operation class]), NSStringFromSelector(delegateMethod), e);
                 }
             });
         }
@@ -424,7 +447,7 @@ int delete(char * const *paths, void *ctx)
 {
     int result = 0;
     
-    FTS *tree = fts_open(paths, FTS_NOCHDIR, 0);
+    FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
     
     if (tree)
     {
@@ -480,7 +503,8 @@ int delete(char * const *paths, void *ctx)
     return result;
 }
 
-#define UPDATE_COPY_PREFLIGHT_INFO status->total_objects++;\
+#define UPDATE_COPY_PREFLIGHT_INFO { status->total_objects++;\
+\
 if (node->fts_info != FTS_D)\
 {\
     status->total_bytes += (node->fts_statp)->st_size;\
@@ -512,195 +536,255 @@ if (node->fts_info != FTS_D)\
         if (bytes_cnt > -1)\
             status->total_bytes += bytes_cnt;\
     }\
+}\
+}
+
+#define SKIP_FILE_PATH(x) { size_t len = status->skip_pos + strlen(x) + 1;\
+\
+    status->skip_paths = realloc(status->skip_paths, sizeof(char *) * len);\
+    char *skip_path = (char *)status->skip_paths + status->skip_pos;\
+\
+    strcpy(skip_path, x);\
+    status->skip_pos = len;\
 }
 
 int preflight_copymove(char * const *paths, const char *dst, void *ctx)
 {
-    // Adidional preflighting:
     // 1. TO DO!! If src & dst are on different volumes, move should change to copy with delete after successful copying.
     
-    BOOL supportsBigFiles = YES;
-    
-    errno = 0;
-    long max_fsizebits = pathconf(dst, _PC_FILESIZEBITS);
-    
-    if (max_fsizebits == -1 && errno == EINVAL)
-    {
-        // Use getattrlist() instead.
-        /* struct statfs stfs;
-        
-        if (statfs(dst, &stfs) == 0)
-        {
-            struct attrlist attrlst;
-            
-            attrlst.bitmapcount = ATTR_BIT_MAP_COUNT;
-            attrlst.reserved = 0;
-            attrlst.commonattr = ATTR_CMN_RETURNED_ATTRS;
-            attrlst.volattr = ATTR_VOL_INFO | ATTR_VOL_CAPABILITIES;
-            attrlst.dirattr = 0;
-            attrlst.fileattr = 0;
-            attrlst.forkattr = 0;
-        } */
-        
-    }
-    else
-        supportsBigFiles = (max_fsizebits == 64);
-    
     int result = 0;
-    char path_sep = '/';
+    
+    struct stat st;
+    
+    if ((result = lstat(dst, &st)) == 0)
+    {
+        if (!S_ISDIR(st.st_mode))
+        {
+            result = -1;
+            errno = ENOTDIR;
+        }
+    }
+    
+    if (result == 0)
+        result = access(dst, _WRITE_OK | _APPEND_OK);
     
     op_status *status = (op_status *)ctx;
     
-    FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
-    
-    if (tree)
+    if (result == 0)
     {
-        short fts_level = -1;
-        short replace_level = SHRT_MAX;
-        short keepboth_level = SHRT_MAX;
+        BOOL supportsBigFiles = YES;
         
-        char *dst_path;
-        asprintf(&dst_path, "%s", dst);
+        long max_fsizebits = pathconf(dst, _PC_FILESIZEBITS);
         
-        char *prefix = malloc(sizeof(char) * 3);
-        
-        FTSENT *node;
-        
-        while ((result == 0) && (node = fts_read(tree)))
+        if (max_fsizebits == -1)
         {
-            if (node->fts_info == FTS_F || node->fts_info == FTS_D || node->fts_info == FTS_DP || node->fts_info == FTS_SL || node->fts_info == FTS_SLNONE || node->fts_info == FTS_DEFAULT)
+            struct statfs stfs;
+            
+            if (statfs(dst, &stfs) == 0)
             {
-                if (node->fts_info == FTS_F)
+                struct attrlist attrlst;
+                
+                attrlst.bitmapcount = ATTR_BIT_MAP_COUNT;
+                attrlst.reserved = 0;
+                attrlst.commonattr = ATTR_CMN_RETURNED_ATTRS;
+                attrlst.volattr = ATTR_VOL_INFO | ATTR_VOL_CAPABILITIES;
+                attrlst.dirattr = 0;
+                attrlst.fileattr = 0;
+                attrlst.forkattr = 0;
+                
+                void *attrbuf = malloc(56);
+                
+                if (getattrlist(stfs.f_mntonname, &attrlst, attrbuf, 60, FSOPT_NOFOLLOW ) == 0)
                 {
-                    strncpy(prefix, node->fts_name, 2);
-                    prefix[2] = '\0';
+                    u_int32_t vol_cap_format = *((u_int32_t *)attrbuf + 6);
+                    u_int32_t vol_cap_format_valid = *((u_int32_t *)attrbuf + 10);
                     
-                    if (strcmp(prefix, "._") == 0)
+                    if (vol_cap_format_valid & VOL_CAP_FMT_2TB_FILESIZE)
+                        supportsBigFiles = vol_cap_format & VOL_CAP_FMT_2TB_FILESIZE;
+                }
+                
+                free(attrbuf);
+            }
+        }
+        else
+            supportsBigFiles = (max_fsizebits == 64);
+        
+        char path_sep = '/';
+        
+        FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
+        
+        if (tree)
+        {
+            short fts_level = -1;
+            short replace_level = SHRT_MAX;
+            short keepboth_level = SHRT_MAX;
+            
+            char *dst_path;
+            asprintf(&dst_path, "%s", dst);
+            
+            char *prefix = malloc(sizeof(char) * 3);
+            
+            FTSENT *node;
+            
+            while ((result == 0) && (node = fts_read(tree)))
+            {
+                if (node->fts_info == FTS_F || node->fts_info == FTS_D || node->fts_info == FTS_DP || node->fts_info == FTS_SL || node->fts_info == FTS_SLNONE || node->fts_info == FTS_DEFAULT)
+                {
+                    if (node->fts_info == FTS_F)
                     {
-                        fts_set(tree, node, FTS_SKIP);
-                        continue;
+                        strncpy(prefix, node->fts_name, 2);
+                        prefix[2] = '\0';
+                        
+                        if (strcmp(prefix, "._") == 0)
+                        {
+                            fts_set(tree, node, FTS_SKIP);
+                            continue;
+                        }
                     }
-                }
-                
-                char *temp_path;
-                asprintf(&temp_path, "%s", dst_path);
-                
-                free(dst_path);
-                
-                if (node->fts_level > fts_level)
-                    asprintf(&dst_path, "%s%c%s", temp_path, path_sep, node->fts_name);
-                else if (node->fts_level < fts_level)
-                    asprintf(&dst_path, "%s", dirname(temp_path));
-                else
-                {
-                    char *dir_path;
                     
-                    asprintf(&dir_path, "%s", dirname(temp_path));
-                    asprintf(&dst_path, "%s%c%s", dir_path, path_sep, node->fts_name);
+                    char *temp_path;
+                    asprintf(&temp_path, "%s", dst_path);
                     
-                    free(dir_path);
-                }
-                
-                free(temp_path);
-                
-                fts_level = node->fts_level;
-                
-                if (fts_level <= replace_level)
-                    replace_level = SHRT_MAX;
-                
-                if (fts_level <= keepboth_level)
-                    keepboth_level = SHRT_MAX;
-                
-                if (node->fts_info != FTS_DP)
-                {
-                    if (strstr(dst, node->fts_path) != NULL)
+                    free(dst_path);
+                    
+                    if (node->fts_level > fts_level)
+                        asprintf(&dst_path, "%s%c%s", temp_path, path_sep, node->fts_name);
+                    else if (node->fts_level < fts_level)
+                        asprintf(&dst_path, "%s", dirname(temp_path));
+                    else
                     {
-                        result = -1;
-                        errno = EINVAL;
+                        char *dir_path;
+                        
+                        asprintf(&dir_path, "%s", dirname(temp_path));
+                        asprintf(&dst_path, "%s%c%s", dir_path, path_sep, node->fts_name);
+                        
+                        free(dir_path);
                     }
                     
-                    if (!status->copy && strcmp(node->fts_path, dst_path) == 0)
-                    {
-                        result = -1;
-                        errno = EINVAL;
-                    }
-                }
-                
-                if (node->fts_info == FTS_F && !supportsBigFiles && node->fts_statp->st_size > BIG_FILE_SIZE)
-                {
-                    result = -1;
-                    errno = EFBIG;
-                }
-                
-                if (result == 0)
-                {
+                    free(temp_path);
+                    
+                    fts_level = node->fts_level;
+                    
+                    if (fts_level <= replace_level)
+                        replace_level = SHRT_MAX;
+                    
+                    if (fts_level <= keepboth_level)
+                        keepboth_level = SHRT_MAX;
+                    
                     if (node->fts_info != FTS_DP)
                     {
-                        // Not closing dir, so all other files (inculuding opening dir).
-                        struct stat st;
-                        
-                        if (replace_level == SHRT_MAX && keepboth_level == SHRT_MAX && lstat(dst_path, &st) == 0)
+                        if (strstr(dst, node->fts_path) != NULL)
                         {
-                            // Dest file exists!!!
-                            // Create proposed new destination name.
-                            char *extension = NULL;
-                            char *dot = strrchr(node->fts_name, '.');
+                            result = -1;
+                            errno = EINVAL;
+                        }
+                        
+                        if (!status->copy && strcmp(node->fts_path, dst_path) == 0)
+                        {
+                            result = -1;
+                            errno = EINVAL;
+                        }
+                    }
+                    
+                    if (node->fts_info == FTS_F && !supportsBigFiles && node->fts_statp->st_size > BIG_FILE_SIZE)
+                    {
+                        result = -1;
+                        errno = EFBIG;
+                    }
+                    
+                    if (result == 0)
+                    {
+                        if (node->fts_info != FTS_DP)
+                        {
+                            // Not closing dir, so all other files (inculuding opening dir).
+                            struct stat st;
                             
-                            if (dot && strlen(dot) > 1 && strlen(node->fts_name) > strlen(dot))
-                                extension = dot + 1;
-                            
-                            size_t noextlen;
-                            
-                            if (extension)
-                                noextlen = strlen(dst_path) - strlen(extension) - 1;
-                            else
-                                noextlen = strlen(dst_path);
-                            
-                            char *new_dst_noext = malloc(sizeof(char) * (noextlen + 1));
-                            strncpy(new_dst_noext, dst_path, noextlen);
-                            new_dst_noext[noextlen] = '\0';
-                            
-                            char *new_dst;
-                            
-                            if (extension)
-                                asprintf(&new_dst, "%s%s.%s", new_dst_noext, " added", extension);
-                            else
-                                asprintf(&new_dst, "%s%s", new_dst_noext, " added");
-                            
-                            free(new_dst_noext);
-                            
-                            NTFileConflictResolution resolution = delegate_conflict(node->fts_path, dst_path, &new_dst, ctx);
-                            
-                            switch (resolution)
+                            if (replace_level == SHRT_MAX && keepboth_level == SHRT_MAX && lstat(dst_path, &st) == 0)
                             {
-                                case NTFileConflictResolutionQuit:
+                                // Dest file exists!!!
+                                // Create proposed new destination name.
+                                char *extension = NULL;
+                                char *dot = strrchr(node->fts_name, '.');
+                                
+                                if (dot && strlen(dot) > 1 && strlen(node->fts_name) > strlen(dot))
+                                    extension = dot + 1;
+                                
+                                size_t noextlen;
+                                
+                                if (extension)
+                                    noextlen = strlen(dst_path) - strlen(extension) - 1;
+                                else
+                                    noextlen = strlen(dst_path);
+                                
+                                char *new_dst_noext = malloc(sizeof(char) * (noextlen + 1));
+                                strncpy(new_dst_noext, dst_path, noextlen);
+                                new_dst_noext[noextlen] = '\0';
+                                
+                                char *new_dst;
+                                
+                                if (extension)
+                                    asprintf(&new_dst, "%s%s.%s", new_dst_noext, " added", extension);
+                                else
+                                    asprintf(&new_dst, "%s%s", new_dst_noext, " added");
+                                
+                                free(new_dst_noext);
+                                
+                                NTFileConflictResolution resolution = delegate_conflict(node->fts_path, dst_path, &new_dst, ctx);
+                                
+                                switch (resolution)
                                 {
-                                    result = -1;
-                                    errno = ECANCELED;
-                                    break;
-                                }
-                                case NTFileConflictResolutionSkip:
-                                {
-                                    fts_set(tree, node, FTS_SKIP);
-                                    
-                                    size_t len = status->skip_pos + strlen(node->fts_path) + 1;
-                                    
-                                    status->skip_paths = realloc(status->skip_paths, sizeof(char *) * len);
-                                    char *skip_path = (char *)status->skip_paths + status->skip_pos;
-                                    
-                                    strcpy(skip_path, node->fts_path);
-                                    status->skip_pos = len;
-                                    break;
-                                }
-                                case NTFileConflictResolutionReplace:
-                                {
-                                    if (strcmp(node->fts_path, dst_path) == 0)
+                                    case NTFileConflictResolutionQuit:
                                     {
                                         result = -1;
-                                        errno = EINVAL;
+                                        errno = ECANCELED;
+                                        break;
                                     }
-                                    
-                                    if (result == 0)
+                                    case NTFileConflictResolutionSkip:
+                                    {
+                                        fts_set(tree, node, FTS_SKIP);
+                                        SKIP_FILE_PATH(node->fts_path)
+                                        break;
+                                    }
+                                    case NTFileConflictResolutionReplace:
+                                    {
+                                        if (strcmp(node->fts_path, dst_path) == 0)
+                                        {
+                                            result = -1;
+                                            errno = EINVAL;
+                                        }
+                                        
+                                        if (result == 0)
+                                        {
+                                            if (!status->copy)
+                                            {
+                                                fts_set(tree, node, FTS_SKIP);
+                                                result = access_move(node->fts_path, node->fts_statp);
+                                            }
+                                            else
+                                                result = access_read(node->fts_path, node->fts_statp);
+                                            
+                                            if (result == 0)
+                                                result = access_delete(dst_path, &st);
+                                            
+                                            if (result == 0)
+                                            {
+                                                if (status->copy)
+                                                    UPDATE_COPY_PREFLIGHT_INFO
+                                                    
+                                                size_t len = status->replace_pos + strlen(node->fts_path) + 1;
+                                                
+                                                status->replace_paths = realloc(status->replace_paths, sizeof(char *) * len);
+                                                char *replace_path = (char *)status->replace_paths + status->replace_pos;
+                                                
+                                                strcpy(replace_path, node->fts_path);
+                                                status->replace_pos = len;
+                                                
+                                                replace_level = fts_level;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                    case NTFileConflictResolutionKeepBoth:
                                     {
                                         if (!status->copy)
                                         {
@@ -710,167 +794,125 @@ int preflight_copymove(char * const *paths, const char *dst, void *ctx)
                                         else
                                             result = access_read(node->fts_path, node->fts_statp);
                                         
-                                        if (result == 0)
-                                            result = access_delete(dst_path, &st);
+                                        if ((result == 0) && (node->fts_info == FTS_D))
+                                            result = access(dirname((dst_path)), _WRITE_OK | _APPEND_OK);
                                         
                                         if (result == 0)
                                         {
                                             if (status->copy)
                                                 UPDATE_COPY_PREFLIGHT_INFO
                                                 
-                                            size_t len = status->replace_pos + strlen(node->fts_path) + 1;
+                                            size_t len;
+                                            char *keepbothpath;
                                             
-                                            status->replace_paths = realloc(status->replace_paths, sizeof(char *) * len);
-                                            char *replace_path = (char *)status->replace_paths + status->replace_pos;
+                                            len = status->keepboth_src_pos + strlen(node->fts_path) + 1;
+                                            status->keepboth_src_paths = realloc(status->keepboth_src_paths, sizeof(char *) * len);
+                                            keepbothpath = (char *)status->keepboth_src_paths + status->keepboth_src_pos;
+                                            strcpy(keepbothpath, node->fts_path);
+                                            status->keepboth_src_pos = len;
                                             
-                                            strcpy(replace_path, node->fts_path);
-                                            status->replace_pos = len;
+                                            len = status->keepboth_dst_pos + strlen(new_dst) + 1;
+                                            status->keepboth_dst_paths = realloc(status->keepboth_dst_paths, sizeof(char *) * len);
+                                            keepbothpath = (char *)status->keepboth_dst_paths + status->keepboth_dst_pos;
+                                            strcpy(keepbothpath, new_dst);
+                                            status->keepboth_dst_pos = len;
                                             
-                                            replace_level = fts_level;
+                                            keepboth_level = fts_level;
                                         }
+                                        break;
                                     }
-                                    break;
-                                }
-                                case NTFileConflictResolutionKeepBoth:
-                                {
-                                    if (!status->copy)
-                                    {
-                                        fts_set(tree, node, FTS_SKIP);
-                                        result = access_move(node->fts_path, node->fts_statp);
-                                    }
-                                    else
-                                        result = access_read(node->fts_path, node->fts_statp);
-                                    
-                                    if ((result == 0) && (node->fts_info == FTS_D))
-                                        result = access(dirname((dst_path)), _WRITE_OK | _APPEND_OK);
-                                    
-                                    if (result == 0)
+                                    case NTFileConflictResolutionMerge:
+                                    default:
                                     {
                                         if (status->copy)
+                                            result = access_read(node->fts_path, node->fts_statp);
+                                        else
+                                            result = access_delete(node->fts_path, node->fts_statp);
+                                        
+                                        if ((result == 0) && (node->fts_info == FTS_D))
+                                            result = access(dst_path, _WRITE_OK | _APPEND_OK);
+                                        
+                                        if (status->copy && result == 0)
                                             UPDATE_COPY_PREFLIGHT_INFO
                                             
-                                        size_t len;
-                                        char *keepbothpath;
-                                        
-                                        len = status->keepboth_src_pos + strlen(node->fts_path) + 1;
-                                        status->keepboth_src_paths = realloc(status->keepboth_src_paths, sizeof(char *) * len);
-                                        keepbothpath = (char *)status->keepboth_src_paths + status->keepboth_src_pos;
-                                        strcpy(keepbothpath, node->fts_path);
-                                        status->keepboth_src_pos = len;
-                                        
-                                        len = status->keepboth_dst_pos + strlen(new_dst) + 1;
-                                        status->keepboth_dst_paths = realloc(status->keepboth_dst_paths, sizeof(char *) * len);
-                                        keepbothpath = (char *)status->keepboth_dst_paths + status->keepboth_dst_pos;
-                                        strcpy(keepbothpath, new_dst);
-                                        status->keepboth_dst_pos = len;
-                                        
-                                        keepboth_level = fts_level;
+                                        break;
                                     }
-                                    break;
                                 }
-                                case NTFileConflictResolutionMerge:
-                                default:
-                                {
-                                    if (status->copy)
-                                        result = access_read(node->fts_path, node->fts_statp);
-                                    else
-                                        result = access_delete(node->fts_path, node->fts_statp);
-                                    
-                                    if ((result == 0) && (node->fts_info == FTS_D))
-                                        result = access(dst_path, _WRITE_OK | _APPEND_OK);
-                                    
-                                    if (status->copy && result == 0)
-                                        UPDATE_COPY_PREFLIGHT_INFO
-                                        
-                                    break;
-                                }
+                                
+                                free(new_dst);
                             }
-                            
-                            free(new_dst);
-                        }
-                        else if (replace_level != SHRT_MAX || keepboth_level != SHRT_MAX || errno == ENOENT)
-                        {
-                            // Dest file doesn't exist!!!
-                            if (!status->copy)
+                            else if (replace_level != SHRT_MAX || keepboth_level != SHRT_MAX || errno == ENOENT)
                             {
-                                fts_set(tree, node, FTS_SKIP);
-                                result = access_move(node->fts_path, node->fts_statp);
+                                // Dest file doesn't exist!!!
+                                if (!status->copy)
+                                {
+                                    fts_set(tree, node, FTS_SKIP);
+                                    result = access_move(node->fts_path, node->fts_statp);
+                                }
+                                else
+                                    result = access_read(node->fts_path, node->fts_statp);
+                                
+                                if (status->copy && result == 0)
+                                    UPDATE_COPY_PREFLIGHT_INFO
                             }
                             else
-                                result = access_read(node->fts_path, node->fts_statp);
-                            
-                            if (status->copy && result == 0)
-                                UPDATE_COPY_PREFLIGHT_INFO
-                                }
-                        else
-                            result = -1;
+                                result = -1;
+                        }
                     }
                 }
-            }
-            else if ((node->fts_info == FTS_DNR) || (node->fts_info == FTS_ERR) || (node->fts_info == FTS_NS))
-                result = -1;
-            else if ((node->fts_info == FTS_DC) || (node->fts_info == FTS_INIT) || (node->fts_info == FTS_NSOK) || (node->fts_info == FTS_W))
-            {
-                result = -1;
-                errno = EBADF;
-            }
-            
-            if (result == 0)
-            {
-                if (!delegate_progress(NTFileOperationStagePreflighting, node->fts_path, NULL, ctx))
+                else if ((node->fts_info == FTS_DNR) || (node->fts_info == FTS_ERR) || (node->fts_info == FTS_NS))
+                    result = -1;
+                else if ((node->fts_info == FTS_DC) || (node->fts_info == FTS_INIT) || (node->fts_info == FTS_NSOK) || (node->fts_info == FTS_W))
                 {
                     result = -1;
-                    errno = ECANCELED;
+                    errno = EBADF;
                 }
-            }
-            else if (errno != ECANCELED)
-            {
-                if (delegate_error(NTFileOperationStagePreflighting, node->fts_path, NULL, ctx))
+                
+                if (result == 0)
                 {
-                    result = 0;
-                    
-                    fts_set(tree, node, FTS_SKIP);
-                    
-                    size_t len = status->skip_pos + strlen(node->fts_path) + 1;
-                    
-                    status->skip_paths = realloc(status->skip_paths, sizeof(char *) * len);
-                    char *skip_path = (char *)status->skip_paths + status->skip_pos;
-                    
-                    strcpy(skip_path, node->fts_path);
-                    status->skip_pos = len;
+                    if (!delegate_progress(NTFileOperationStagePreflighting, node->fts_path, NULL, ctx))
+                    {
+                        result = -1;
+                        errno = ECANCELED;
+                    }
                 }
-                else
-                    errno = ECANCELED;
+                else if (errno != ECANCELED)
+                {
+                    if (delegate_error(NTFileOperationStagePreflighting, node->fts_path, NULL, ctx))
+                    {
+                        result = 0;
+                        fts_set(tree, node, FTS_SKIP);
+                        SKIP_FILE_PATH(node->fts_path)
+                    }
+                    else
+                        errno = ECANCELED;
+                }
+            }
+            
+            free(dst_path);
+            free(prefix);
+            
+            fts_close(tree);
+        }
+        
+        if (result == 0 && errno != 0)
+        {
+            // This happens if fts_read() or fts_open() fails.
+            if (delegate_error(NTFileOperationStagePreflighting, paths[0], NULL, ctx))
+            {
+                result = 0;
+                SKIP_FILE_PATH(paths[0])
+            }
+            else
+            {
+                result = -1;
+                errno = ECANCELED;
             }
         }
         
-        free(dst_path);
-        free(prefix);
-        
-        fts_close(tree);
     }
-    
-    if (result == 0 && errno != 0)
-    {
-        // This happens if fts_read() or fts_open() fails.
-        if (delegate_error(NTFileOperationStagePreflighting, paths[0], NULL, ctx))
-        {
-            result = 0;
-            
-            size_t len = status->skip_pos + strlen(paths[0]) + 1;
-            
-            status->skip_paths = realloc(status->skip_paths, sizeof(char *) * len);
-            char *skip_path = (char *)status->skip_paths + status->skip_pos;
-            
-            strcpy(skip_path, paths[0]);
-            status->skip_pos = len;
-        }
-        else
-        {
-            result = -1;
-            errno = ECANCELED;
-        }
-    }
+    else
+        delegate_error(NTFileOperationStagePreflighting, paths[0], dst, ctx);
     
     char *path;
     
@@ -1103,6 +1145,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
 
 @interface NTFileOperation (Private)
 
+- (void)checkSources:(NSArray *)theSrcURLs destination:(NSURL *)aDstURL;
 - (void)doAsyncCopy:(BOOL)isCopy itemsAtURLs:(NSArray *)theSrcURLs toURL:(NSURL *)aDstURL;
 
 @end
@@ -1143,6 +1186,8 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
 
 - (BOOL)copySyncItemsAtURLs:(NSArray *)theSrcURLs toURL:(NSURL *)aDstURL error:(NSError **)anError
 {
+    [self checkSources:theSrcURLs destination:aDstURL];
+    
     BOOL result = YES;
     
     copyfile_state_t state = copyfile_state_alloc();
@@ -1187,6 +1232,8 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
 
 - (BOOL)moveSyncItemsAtURLs:(NSArray *)theSrcURLs toURL:(NSURL *)aDstURL error:(NSError **)anError
 {
+    [self checkSources:theSrcURLs destination:aDstURL];
+    
     BOOL result = YES;
     
     const char *dst = [[aDstURL path] fileSystemRepresentation];
@@ -1213,8 +1260,25 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
 
 @implementation NTFileOperation (Private)
 
+- (void)checkSources:(NSArray *)theSrcURLs destination:(NSURL *)aDstURL
+{
+    if (aDstURL == nil || ![aDstURL isKindOfClass:[NSURL class]])
+        [NSException raise:NSInvalidArgumentException format:@"-[%@ %@] exception: destination is not NSURL object.", NSStringFromClass([self class]), NSStringFromSelector(_cmd)];
+    
+    for (id source in theSrcURLs)
+    {
+        if (![source isKindOfClass:[NSURL class]])
+            [NSException raise:NSInvalidArgumentException format:@"-[%@ %@] exception: source is not URL object.", NSStringFromClass([self class]), NSStringFromSelector(_cmd)];
+    }
+}
+
 - (void)doAsyncCopy:(BOOL)isCopy itemsAtURLs:(NSArray *)theSrcURLs toURL:(NSURL *)aDstURL
 {
+    [self checkSources:theSrcURLs destination:aDstURL];
+    
+    if ([theSrcURLs count] == 0)
+        return;
+    
     dispatch_queue_t queue = dispatch_get_current_queue();
     
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^
@@ -1295,7 +1359,9 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             free(status.keepboth_src_paths);
             free(status.keepboth_dst_paths);
             
-            if ([[self delegate] respondsToSelector:@selector(fileOperation:shouldProceedOnProgressInfo:)])
+            SEL delegateMethod = @selector(fileOperation:shouldProceedOnProgressInfo:);
+            
+            if ([[self delegate] respondsToSelector:delegateMethod])
             {
                 NSDictionary *info = [NSDictionary dictionaryWithObjectsAndKeys:
                                       [NSNumber numberWithUnsignedInteger:NTFileOperationStageComplete], NTFileOperationStageKey,
@@ -1317,7 +1383,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                     }
                     @catch (NSException *e)
                     {
-                        NSLog(@"-[%@ fileOperation:shouldProceedOnProgressInfo:] exception (calling queue): %@", NSStringFromClass([self class]), e);
+                        NSLog(@"-[%@ %@] exception (calling queue): %@", NSStringFromClass([self class]), NSStringFromSelector(delegateMethod), e);
                     }
                 });
                 
@@ -1327,7 +1393,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
         }
         @catch (NSException *e)
         {
-            NSLog(@"-[%@ doAsyncCopy:itemsAtURLs:toURL:] exception (process queue): %@", NSStringFromClass([self class]), e);
+            NSLog(@"-[%@ %@] exception (process queue): %@", NSStringFromClass([self class]), NSStringFromSelector(_cmd), e);
         }
     });
 }

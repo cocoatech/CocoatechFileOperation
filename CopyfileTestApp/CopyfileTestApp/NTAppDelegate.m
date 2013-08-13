@@ -53,7 +53,6 @@
         
         [destinationPanel setCanChooseDirectories:YES];
         [destinationPanel setAllowsMultipleSelection:NO];
-        [destinationPanel setCanChooseFiles:NO];
         [destinationPanel setTitle:@"Destination?"];
         [destinationPanel setPrompt:isCopy ? @"Copy" : @"Move"];
         
