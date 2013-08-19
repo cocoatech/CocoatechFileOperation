@@ -19,12 +19,6 @@
 #define XATTR_MAXSIZE 67108864
 #define BIG_FILE_SIZE 4294967295
 
-@interface NTFileOperation ()
-
-@property (nonatomic, retain) NSMutableDictionary *directoryResponses;
-
-@end
-
 typedef struct {
     void                *operation;
     BOOL                copy;
@@ -35,11 +29,14 @@ typedef struct {
     BOOL                enabled;
     uint64_t            total_bytes;
     uint64_t            completed_bytes;
+    uint64_t            total_objects;
+    uint64_t            completed_objects;
     uint64_t            current_bytes;
     uint64_t            start_bytes;
     uint64_t            start_time;
-    uint64_t            total_objects;
-    uint64_t            completed_objects;
+    uint64_t            throughputs[10];
+    int                 *dir_responses;
+    uint64_t            dir_resp_cnt;
     char                **skip_paths;
     long                skip_pos;
     char                **replace_paths;
@@ -378,11 +375,24 @@ BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *
             
             if (stage == NTFileOperationStageRunning)
             {
+                for (int i = 0; i < 9; i++)
+                    status->throughputs[i] = status->throughputs[i+1];
+                
                 struct timeval currtimeval;
                 gettimeofday(&currtimeval, NULL);
                 uint64_t curr_time = currtimeval.tv_sec * 1000000 + currtimeval.tv_usec;
                 
-                uint64_t throughput = (status->completed_bytes - status->start_bytes) * 1000000 / (curr_time - status->start_time);
+                status->throughputs[9] = (status->completed_bytes - status->start_bytes) * 1000000 / (curr_time - status->start_time);
+                
+                uint64_t throughput = status->throughputs[9];
+                
+                for (int i = 0; i < 9; i++)
+                    throughput += status->throughputs[i];
+                
+                throughput /= 10;
+                
+                status->start_bytes = status->completed_bytes;
+                status->start_time = curr_time;
                 
                 info = [NSDictionary dictionaryWithObjectsAndKeys:
                         [NSNumber numberWithUnsignedInteger:NTFileOperationStageRunning], NTFileOperationStageKey,
@@ -944,11 +954,23 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
     int result = COPYFILE_CONTINUE;
     
     op_status *status = (op_status *)ctx;
-    NTFileOperation *operation = (NTFileOperation *)status->operation;
     
     if (stage == COPYFILE_START)
     {
-        if (what == COPYFILE_RECURSE_DIR || what == COPYFILE_RECURSE_FILE)
+        if (what == COPYFILE_RECURSE_FILE)
+        {
+            char *prefix = malloc(sizeof(char) * 3);
+            
+            strncpy(prefix, basename((char *)src), 2);
+            prefix[2] = '\0';
+            
+            if (strcmp(prefix, "._") == 0)
+                result = COPYFILE_SKIP;
+            
+            free(prefix);
+        }
+        
+        if (result == COPYFILE_CONTINUE && (what == COPYFILE_RECURSE_DIR || what == COPYFILE_RECURSE_FILE))
         {
             char *res_path;
             
@@ -1060,12 +1082,16 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                 result = COPYFILE_QUIT;
             
             if (what == COPYFILE_RECURSE_DIR)
-                [[operation directoryResponses] setObject:[NSNumber numberWithInt:result] forKey:[NSString stringWithUTF8String:src]];
+            {
+                status->dir_responses = realloc(status->dir_responses, sizeof(int) * (status->dir_resp_cnt + 1));
+                *(status->dir_responses + status->dir_resp_cnt++) = result;
+            }
             
-            status->current_bytes = 0;
+            if (what == COPYFILE_RECURSE_FILE)
+                status->current_bytes = 0;
         }
-        else if (what == COPYFILE_RECURSE_DIR_CLEANUP)
-            result = [[[operation directoryResponses] objectForKey:[NSString stringWithUTF8String:src]] intValue];
+        else if (result == COPYFILE_CONTINUE && what == COPYFILE_RECURSE_DIR_CLEANUP)
+            result = *(status->dir_responses + --status->dir_resp_cnt);
     }
     else if (stage == COPYFILE_FINISH)
     {
@@ -1114,15 +1140,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             status->errcnt++;
             
             if (delegate_error(NTFileOperationStageRunning, src, dst, ctx))
-            {
-                struct timeval currtimeval;
-                gettimeofday(&currtimeval, NULL);
-                
-                status->start_time = currtimeval.tv_sec * 1000000 + currtimeval.tv_usec;
-                status->start_bytes = status->completed_bytes;
-                
                 result = COPYFILE_SKIP;
-            }
             else
                 result = COPYFILE_QUIT;
         }
@@ -1145,7 +1163,6 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
 - (void)dealloc
 {
     [self setDelegate:nil];
-    [self setDirectoryResponses:nil];
     
     [super dealloc];
 }
@@ -1286,6 +1303,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             status.enabled = YES;
             status.total_bytes = 0;
             status.total_objects = 0;
+            status.dir_responses = NULL;
             status.skip_paths = NULL;
             status.skip_pos = 0;
             status.replace_paths = NULL;
@@ -1311,20 +1329,18 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             {
                 status.enabled = YES;
                 status.completed_bytes = 0;
+                status.completed_objects = 0;
                 status.current_bytes = 0;
                 status.start_bytes = 0;
-                status.completed_objects = 0;
-                
-                struct timeval start_time;
-                gettimeofday(&start_time, NULL);
-                status.start_time = start_time.tv_sec * 1000000 + start_time.tv_usec;
-                
+                status.start_time = 0;
+                status.dir_resp_cnt = 0;
                 status.skip_pos = 0;
                 status.replace_pos = 0;
                 status.keepboth_src_pos = 0;
                 status.keepboth_dst_pos = 0;
                 
-                [self setDirectoryResponses:[NSMutableDictionary dictionary]];
+                for (int i = 0; i < 10; i++)
+                    status.throughputs[i] = 0;
                 
                 copyfile_state_t state = copyfile_state_alloc();
                 
@@ -1352,6 +1368,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                 dispatch_release(status.timer);
             }
             
+            free(status.dir_responses);
             free(status.skip_paths);
             free(status.replace_paths);
             free(status.keepboth_src_paths);
