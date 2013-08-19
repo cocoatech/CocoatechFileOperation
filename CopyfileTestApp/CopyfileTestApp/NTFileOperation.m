@@ -451,7 +451,7 @@ BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *
     return result;
 }
 
-int delete(char * const *paths, void *ctx)
+int delete(char * const *paths, int flags, void *ctx)
 {
     int result = 0;
     
@@ -464,6 +464,8 @@ int delete(char * const *paths, void *ctx)
         
         while ((result == 0) && (node = fts_read(tree)))
         {
+            if ((flags & O_EXCL) && node->fts_level > 0)
+                break;
             
             if (node->fts_info == FTS_F || node->fts_info == FTS_SL || node->fts_info == FTS_SLNONE || node->fts_info == FTS_DEFAULT)
             {
@@ -994,7 +996,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                         // REPLACED FILE!!!
                         char *paths[] = { (char *)dst, 0 };
                         
-                        if (delete(paths, ctx) != 0)
+                        if (delete(paths, 0, ctx) != 0)
                         {
                             result = progress_copymove(what, COPYFILE_ERR, state, src, dst, ctx);
                             
@@ -1114,31 +1116,9 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             
             if (what == COPYFILE_RECURSE_DIR_CLEANUP && !status->copy)
             {
-                BOOL isEmpty = NO;
-                char *paths[] = { (char *)src, 0 };
-                
-                FTSENT *node;
-                FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
-                
-                if (tree)
-                {
-                    isEmpty = YES;
-                    
-                    while ((node = fts_read(tree)))
-                    {
-                        if (node->fts_level > 0)
-                        {
-                            isEmpty = NO;
-                            break;
-                        }
-                    }
-                    
-                    fts_close(tree);
-                }
-                
                 // Delete (silently) only of dir is empty, no skipped files.
-                if (isEmpty)
-                    delete(paths, ctx);
+                char *paths[] = { (char *)src, 0 };
+                delete(paths, O_EXCL, ctx);
             }
         }
     }
@@ -1383,7 +1363,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                 copyfile_state_free(state);
                 
                 if (status.copy && !status.usrcopy && result == 0 && status.skip_pos == 0 && status.errcnt == 0)
-                    delete(paths, (void *)&status);
+                    delete(paths, 0, (void *)&status);
                 
                 dispatch_release(status.timer);
             }
