@@ -1185,7 +1185,6 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
     
     const char *dst = [[aDstURL path] fileSystemRepresentation];
     
-    //NSDate *start = [NSDate date];//
     for (NSURL *srcURL in theSrcURLs)
     {
         const char *src = [[srcURL path] fileSystemRepresentation];
@@ -1200,8 +1199,6 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             break;
         }
     }
-    //NSDate *end = [NSDate date];
-    //NSLog(@"sync copy: %f", [end timeIntervalSince1970] - [start timeIntervalSince1970]);//
     
     copyfile_state_free(state);
     
@@ -1335,17 +1332,23 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                 copyfile_state_set(state, COPYFILE_STATE_STATUS_CTX, (void *)&status);
                 copyfile_flags_t flags = COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW;
                 
+                int result;
+                
                 for (NSURL *srcURL in theSrcURLs)
                 {
                     const char *src = [[srcURL path] fileSystemRepresentation];
                     
-                    int result = copyfile(src, dst, state, flags);
+                    result = copyfile(src, dst, state, flags);
                     
                     if (result != 0)
                         break;
                 }
                 
                 copyfile_state_free(state);
+                
+                if (status.copy && !status.usrcopy && result == 0 && status.skip_pos == 0 && status.errcnt == 0)
+                    delete(paths, (void *)&status);
+                
                 dispatch_release(status.timer);
             }
             
