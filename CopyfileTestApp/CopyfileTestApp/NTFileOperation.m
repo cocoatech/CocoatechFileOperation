@@ -1110,16 +1110,36 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
         }
         else if (what == COPYFILE_RECURSE_DIR_CLEANUP || what == COPYFILE_RECURSE_FILE)
         {
-            if (what == COPYFILE_RECURSE_DIR_CLEANUP)
-            {
-                if (!status->copy)
-                {
-                    char *paths[] = { (char *)src, 0 };
-                    delete(paths, ctx);
-                }
-            }
-            
             status->completed_objects++;
+            
+            if (what == COPYFILE_RECURSE_DIR_CLEANUP && !status->copy)
+            {
+                BOOL isEmpty = NO;
+                char *paths[] = { (char *)src, 0 };
+                
+                FTSENT *node;
+                FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
+                
+                if (tree)
+                {
+                    isEmpty = YES;
+                    
+                    while ((node = fts_read(tree)))
+                    {
+                        if (node->fts_level > 0)
+                        {
+                            isEmpty = NO;
+                            break;
+                        }
+                    }
+                    
+                    fts_close(tree);
+                }
+                
+                // Delete (silently) only of dir is empty, no skipped files.
+                if (isEmpty)
+                    delete(paths, ctx);
+            }
         }
     }
     else if (stage == COPYFILE_PROGRESS)
