@@ -233,7 +233,7 @@
     }
     else
     {
-        firstButton = @"KeepBoth";
+        firstButton = @"Keep both";
         secondButton = @"Replace";
         thirdButton = @"Skip";
         fourthButton = @"Stop";

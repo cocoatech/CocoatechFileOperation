@@ -28,6 +28,7 @@
 typedef struct {
     void                *operation;
     BOOL                copy;
+    BOOL                usrcopy;
     dispatch_queue_t    queue;
     dispatch_source_t   timer;
     double              interval;
@@ -35,12 +36,10 @@ typedef struct {
     uint64_t            total_bytes;
     uint64_t            completed_bytes;
     uint64_t            current_bytes;
-    uint64_t            past_bytes;
+    uint64_t            start_bytes;
+    uint64_t            start_time;
     uint64_t            total_objects;
     uint64_t            completed_objects;
-    struct timeval      past_time;
-    char                **noxattr_paths;
-    long                next_noxattr_pos;
     char                **skip_paths;
     long                skip_pos;
     char                **replace_paths;
@@ -49,6 +48,7 @@ typedef struct {
     long                keepboth_src_pos;
     char                **keepboth_dst_paths;
     long                keepboth_dst_pos;
+    uint64_t            errcnt;
 } op_status;
 
 
@@ -65,8 +65,6 @@ int access_read(const char *path, struct stat *st)
             result = !((st->st_mode & S_IRUSR) == S_IRUSR);
         else
         {
-            result = -1;
-            
             uuid_t useruuid, groupuuid;
             gid_t groupid = getgid();
             
@@ -242,7 +240,7 @@ NTFileConflictResolution delegate_conflict(const char *src, const char *dst, cha
     NTFileOperation *operation = (NTFileOperation *)status->operation;
     SEL delegateMethod = NULL;
     
-    if (status->copy)
+    if (status->usrcopy)
         delegateMethod = @selector(fileOperation:conflictCopyingItemAtURL:toURL:proposedURL:);
     else
         delegateMethod = @selector(fileOperation:conflictMovingItemAtURL:toURL:proposedURL:);
@@ -259,7 +257,7 @@ NTFileConflictResolution delegate_conflict(const char *src, const char *dst, cha
         {
             @try
             {
-                if (status->copy)
+                if (status->usrcopy)
                     result = [[operation delegate] fileOperation:operation conflictCopyingItemAtURL:srcURL toURL:dstURL  proposedURL:&propURL];
                 else
                     result = [[operation delegate] fileOperation:operation conflictMovingItemAtURL:srcURL toURL:dstURL  proposedURL:&propURL];
@@ -301,7 +299,7 @@ BOOL delegate_error(NTFileOperationStage stage, const char *src, const char *dst
     
     if (stage == NTFileOperationStageRunning)
     {
-        if (status->copy)
+        if (status->usrcopy)
             delegateMethod = @selector(fileOperation:shouldProceedAfterError:copyingItemAtURL:toURL:);
         else
             delegateMethod = @selector(fileOperation:shouldProceedAfterError:movingItemAtURL:toURL:);
@@ -343,7 +341,7 @@ BOOL delegate_error(NTFileOperationStage stage, const char *src, const char *dst
             {
                 if (stage == NTFileOperationStageRunning)
                 {
-                    if (status->copy)
+                    if (status->usrcopy)
                         result = [[operation delegate] fileOperation:operation shouldProceedAfterError:error copyingItemAtURL:srcURL toURL:dstURL];
                     else
                         result = [[operation delegate] fileOperation:operation shouldProceedAfterError:error movingItemAtURL:srcURL toURL:dstURL];
@@ -367,42 +365,40 @@ BOOL delegate_error(NTFileOperationStage stage, const char *src, const char *dst
 BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *dst, void *ctx)
 {
     __block BOOL result = YES;
-    
     op_status *status = (op_status *)ctx;
-    NTFileOperation *operation = (NTFileOperation *)status->operation;
-    SEL delegateMethod = @selector(fileOperation:shouldProceedOnProgressInfo:);
     
-    if ([[operation delegate] respondsToSelector:delegateMethod])
+    if (status->enabled)
     {
-        if (status->enabled)
+        NTFileOperation *operation = (NTFileOperation *)status->operation;
+        SEL delegateMethod = @selector(fileOperation:shouldProceedOnProgressInfo:);
+        
+        if ([[operation delegate] respondsToSelector:delegateMethod])
         {
             NSDictionary *info;
             
             if (stage == NTFileOperationStageRunning)
             {
-                uint64_t old_msec = status->past_time.tv_sec * 1000000 + status->past_time.tv_usec;
+                struct timeval currtimeval;
+                gettimeofday(&currtimeval, NULL);
+                uint64_t curr_time = currtimeval.tv_sec * 1000000 + currtimeval.tv_usec;
                 
-                gettimeofday(&status->past_time, NULL);
-                uint64_t new_msec = status->past_time.tv_sec * 1000000 + status->past_time.tv_usec;
-                
-                uint64_t throughput = (status->completed_bytes - status->past_bytes) * 1000000 / (new_msec - old_msec);
-                status->past_bytes = status->completed_bytes;
+                uint64_t throughput = (status->completed_bytes - status->start_bytes) * 1000000 / (curr_time - status->start_time);
                 
                 info = [NSDictionary dictionaryWithObjectsAndKeys:
-                       [NSNumber numberWithUnsignedInteger:NTFileOperationStageRunning], NTFileOperationStageKey,
-                       [NSURL fileURLWithPath:[[NSFileManager defaultManager] stringWithFileSystemRepresentation:src length:strlen(src)]], NTFileOperationSourceItemKey,
-                       [NSURL fileURLWithPath:[[NSFileManager defaultManager] stringWithFileSystemRepresentation:dst length:strlen(dst)]], NTFileOperationDestinationItemKey,
-                       [NSNumber numberWithUnsignedLongLong:status->total_bytes], NTFileOperationTotalBytesKey,
-                       [NSNumber numberWithUnsignedLongLong:status->completed_bytes], NTFileOperationCompletedBytesKey,
-                       [NSNumber numberWithUnsignedLongLong:status->total_objects], NTFileOperationTotalObjectsKey,
-                       [NSNumber numberWithUnsignedLongLong:status->completed_objects], NTFileOperationCompletedObjectsKey,
-                       [NSNumber numberWithUnsignedLongLong:throughput], NTFileOperationThroughputKey, nil];
+                        [NSNumber numberWithUnsignedInteger:NTFileOperationStageRunning], NTFileOperationStageKey,
+                        [NSURL fileURLWithPath:[[NSFileManager defaultManager] stringWithFileSystemRepresentation:src length:strlen(src)]], NTFileOperationSourceItemKey,
+                        [NSURL fileURLWithPath:[[NSFileManager defaultManager] stringWithFileSystemRepresentation:dst length:strlen(dst)]], NTFileOperationDestinationItemKey,
+                        [NSNumber numberWithUnsignedLongLong:status->total_bytes], NTFileOperationTotalBytesKey,
+                        [NSNumber numberWithUnsignedLongLong:status->completed_bytes], NTFileOperationCompletedBytesKey,
+                        [NSNumber numberWithUnsignedLongLong:status->total_objects], NTFileOperationTotalObjectsKey,
+                        [NSNumber numberWithUnsignedLongLong:status->completed_objects], NTFileOperationCompletedObjectsKey,
+                        [NSNumber numberWithUnsignedLongLong:throughput], NTFileOperationThroughputKey, nil];
             }
             else
                 info = [NSDictionary dictionaryWithObjectsAndKeys:
-                                      [NSNumber numberWithUnsignedInteger:stage], NTFileOperationStageKey,
-                                      [NSURL fileURLWithPath:[[NSFileManager defaultManager] stringWithFileSystemRepresentation:src length:strlen(src)]], NTFileOperationSourceItemKey,
-                                      [NSNumber numberWithUnsignedLongLong:status->total_objects], NTFileOperationTotalObjectsKey, nil];
+                        [NSNumber numberWithUnsignedInteger:stage], NTFileOperationStageKey,
+                        [NSURL fileURLWithPath:[[NSFileManager defaultManager] stringWithFileSystemRepresentation:src length:strlen(src)]], NTFileOperationSourceItemKey,
+                        [NSNumber numberWithUnsignedLongLong:status->total_objects], NTFileOperationTotalObjectsKey, nil];
             
             dispatch_group_t group =  dispatch_group_create();
             
@@ -438,6 +434,8 @@ BOOL delegate_progress(NTFileOperationStage stage, const char *src, const char *
                 }
             });
         }
+        else
+            status->enabled = NO;
     }
     
     return result;
@@ -505,38 +503,15 @@ int delete(char * const *paths, void *ctx)
 
 #define UPDATE_COPY_PREFLIGHT_INFO { status->total_objects++;\
 \
-if (node->fts_info != FTS_D)\
-{\
-    status->total_bytes += (node->fts_statp)->st_size;\
-    \
-    if ((node->fts_info == FTS_F) || (node->fts_info == FTS_DEFAULT))\
+    if (node->fts_info != FTS_D)\
     {\
-        if ((node->fts_statp->st_mode & S_IRUSR) != S_IRUSR)\
-        {\
-            size_t len = status->next_noxattr_pos + strlen(node->fts_path) + 1;\
-            \
-            status->noxattr_paths = realloc(status->noxattr_paths, sizeof(char *) * len);\
-            char *noxattr_path = (char *)status->noxattr_paths + status->next_noxattr_pos;\
-            \
-            strcpy(noxattr_path, node->fts_path);\
-            status->next_noxattr_pos = len;\
-        }\
-        else\
-        {\
-            ssize_t bytes_cnt = getxattr(node->fts_path, XATTR_RESOURCEFORK_NAME, NULL, XATTR_MAXSIZE, 0, XATTR_NOFOLLOW);\
-            \
-            if (bytes_cnt > -1)\
-                status->total_bytes += bytes_cnt;\
-        }\
-    }\
-    else\
-    {\
+        status->total_bytes += (node->fts_statp)->st_size;\
+        \
         ssize_t bytes_cnt = getxattr(node->fts_path, XATTR_RESOURCEFORK_NAME, NULL, XATTR_MAXSIZE, 0, XATTR_NOFOLLOW);\
         \
         if (bytes_cnt > -1)\
             status->total_bytes += bytes_cnt;\
     }\
-}\
 }
 
 #define SKIP_FILE_PATH(x) { size_t len = status->skip_pos + strlen(x) + 1;\
@@ -550,10 +525,7 @@ if (node->fts_info != FTS_D)\
 
 int preflight_copymove(char * const *paths, const char *dst, void *ctx)
 {
-    // 1. TO DO!! If src & dst are on different volumes, move should change to copy with delete after successful copying.
-    
     int result = 0;
-    
     struct stat st;
     
     if ((result = lstat(dst, &st)) == 0)
@@ -609,9 +581,32 @@ int preflight_copymove(char * const *paths, const char *dst, void *ctx)
         else
             supportsBigFiles = (max_fsizebits == 64);
         
+        FTSENT *node;
+        FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
+        
+        if (tree)
+        {
+            while ((node = fts_read(tree)))
+            {
+                if (node->fts_info == FTS_F || node->fts_info == FTS_D || node->fts_info == FTS_SL || node->fts_info == FTS_SLNONE || node->fts_info == FTS_DEFAULT)
+                {
+                    if (node->fts_statp->st_dev != st.st_dev)
+                    {
+                        status->copy = YES;
+                        break;
+                    }
+                    
+                    fts_set(tree, node, FTS_SKIP);
+                    
+                }
+            }
+        }
+        
+        fts_close(tree);
+        
         char path_sep = '/';
         
-        FTS *tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
+        tree = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, 0);
         
         if (tree)
         {
@@ -673,11 +668,20 @@ int preflight_copymove(char * const *paths, const char *dst, void *ctx)
                     
                     if (node->fts_info != FTS_DP)
                     {
-                        if (strstr(dst, node->fts_path) != NULL)
+                        char *dstdirpath;
+                        char *srcdirpath;
+                        
+                        asprintf(&dstdirpath, "%s%c", dst, path_sep);
+                        asprintf(&srcdirpath, "%s%c", node->fts_path, path_sep);
+                        
+                        if (strstr(dstdirpath, srcdirpath) != NULL)
                         {
                             result = -1;
                             errno = EINVAL;
                         }
+                        
+                        free(dstdirpath);
+                        free(srcdirpath);
                         
                         if (!status->copy && strcmp(node->fts_path, dst_path) == 0)
                         {
@@ -770,7 +774,7 @@ int preflight_copymove(char * const *paths, const char *dst, void *ctx)
                                             {
                                                 if (status->copy)
                                                     UPDATE_COPY_PREFLIGHT_INFO
-                                                    
+                                                
                                                 size_t len = status->replace_pos + strlen(node->fts_path) + 1;
                                                 
                                                 status->replace_paths = realloc(status->replace_paths, sizeof(char *) * len);
@@ -916,10 +920,6 @@ int preflight_copymove(char * const *paths, const char *dst, void *ctx)
     
     char *path;
     
-    status->noxattr_paths = realloc(status->noxattr_paths, sizeof(char *) * (status->next_noxattr_pos + 1));
-    path = (char *)status->noxattr_paths + status->next_noxattr_pos;
-    path[0] = '\0';
-    
     status->skip_paths = realloc(status->skip_paths, sizeof(char *) * (status->skip_pos + 1));
     path = (char *)status->skip_paths + status->skip_pos;
     path[0] = '\0';
@@ -961,8 +961,10 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             }
             else
             {
+                struct stat st;
+                
                 // See if it exists and if so, ask delegate.
-                if (access(dst, F_OK) == 0)
+                if (lstat(dst, &st) == 0)
                 {
                     res_path = (char *)status->replace_paths + status->replace_pos;
                     if (res_path[0] != '\0' && strcmp(src, res_path) == 0)
@@ -1061,28 +1063,6 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                 [[operation directoryResponses] setObject:[NSNumber numberWithInt:result] forKey:[NSString stringWithUTF8String:src]];
             
             status->current_bytes = 0;
-            
-            if (status->copy && result == COPYFILE_CONTINUE && what == COPYFILE_RECURSE_FILE)
-            {
-                char *noxattr_path = (char *)status->noxattr_paths + status->next_noxattr_pos;
-                
-                if (noxattr_path[0] != '\0' && strcmp(src, noxattr_path) == 0)
-                {
-                    status->next_noxattr_pos += strlen(noxattr_path) + 1;
-                    
-                    copyfile_callback_t callback = progress_copymove;
-                    copyfile_state_t state = copyfile_state_alloc();
-                    
-                    copyfile_state_set(state, COPYFILE_STATE_STATUS_CB, callback);
-                    copyfile_state_set(state, COPYFILE_STATE_STATUS_CTX, ctx);
-                    copyfile_flags_t flags = (COPYFILE_ALL & ~COPYFILE_XATTR) | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW;
-                    
-                    copyfile(src, dst, state, flags);
-                    copyfile_state_free(state);
-                    
-                    result = COPYFILE_SKIP;
-                }
-            }
         }
         else if (what == COPYFILE_RECURSE_DIR_CLEANUP)
             result = [[[operation directoryResponses] objectForKey:[NSString stringWithUTF8String:src]] intValue];
@@ -1131,8 +1111,18 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
     {
         if (errno != ECANCELED)
         {
+            status->errcnt++;
+            
             if (delegate_error(NTFileOperationStageRunning, src, dst, ctx))
+            {
+                struct timeval currtimeval;
+                gettimeofday(&currtimeval, NULL);
+                
+                status->start_time = currtimeval.tv_sec * 1000000 + currtimeval.tv_usec;
+                status->start_bytes = status->completed_bytes;
+                
                 result = COPYFILE_SKIP;
+            }
             else
                 result = COPYFILE_QUIT;
         }
@@ -1164,7 +1154,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
 {
     self = [super init];
     
-    [self setStatusChangeInterval:0.5];
+    [self setStatusChangeInterval:0.4];
     
     return self;
 }
@@ -1191,10 +1181,11 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
     BOOL result = YES;
     
     copyfile_state_t state = copyfile_state_alloc();
-    copyfile_flags_t flags = COPYFILE_ALL | COPYFILE_NOFOLLOW | COPYFILE_EXCL | COPYFILE_VERBOSE;
+    copyfile_flags_t flags = COPYFILE_ALL | COPYFILE_RECURSIVE | COPYFILE_NOFOLLOW;
     
     const char *dst = [[aDstURL path] fileSystemRepresentation];
     
+    //NSDate *start = [NSDate date];//
     for (NSURL *srcURL in theSrcURLs)
     {
         const char *src = [[srcURL path] fileSystemRepresentation];
@@ -1209,6 +1200,8 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             break;
         }
     }
+    //NSDate *end = [NSDate date];
+    //NSLog(@"sync copy: %f", [end timeIntervalSince1970] - [start timeIntervalSince1970]);//
     
     copyfile_state_free(state);
     
@@ -1289,19 +1282,13 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             
             status.operation = (void *)self;
             status.copy = isCopy;
+            status.usrcopy = isCopy;
             status.queue = queue;
             status.timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
             status.interval = [self statusChangeInterval];
             status.enabled = YES;
             status.total_bytes = 0;
-            status.completed_bytes = 0;
-            status.current_bytes = 0;
-            status.past_bytes = 0;
             status.total_objects = 0;
-            status.completed_objects = 0;
-            gettimeofday(&status.past_time, NULL);
-            status.noxattr_paths = NULL;
-            status.next_noxattr_pos = 0;
             status.skip_paths = NULL;
             status.skip_pos = 0;
             status.replace_paths = NULL;
@@ -1310,6 +1297,7 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             status.keepboth_src_pos = 0;
             status.keepboth_dst_paths = NULL;
             status.keepboth_dst_pos = 0;
+            status.errcnt = 0;
             
             char *paths[[theSrcURLs count] + 1];
             
@@ -1325,7 +1313,15 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
             if (preflight_copymove(paths, dst, (void *)&status) == 0)
             {
                 status.enabled = YES;
-                status.next_noxattr_pos = 0;
+                status.completed_bytes = 0;
+                status.current_bytes = 0;
+                status.start_bytes = 0;
+                status.completed_objects = 0;
+                
+                struct timeval start_time;
+                gettimeofday(&start_time, NULL);
+                status.start_time = start_time.tv_sec * 1000000 + start_time.tv_usec;
+                
                 status.skip_pos = 0;
                 status.replace_pos = 0;
                 status.keepboth_src_pos = 0;
@@ -1349,11 +1345,10 @@ int progress_copymove(int what, int stage, copyfile_state_t state, const char *s
                         break;
                 }
                 
-                dispatch_release(status.timer);
                 copyfile_state_free(state);
+                dispatch_release(status.timer);
             }
             
-            free(status.noxattr_paths);
             free(status.skip_paths);
             free(status.replace_paths);
             free(status.keepboth_src_paths);

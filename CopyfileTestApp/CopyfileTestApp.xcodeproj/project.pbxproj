@@ -17,6 +17,7 @@
 		649C7DC917A1250200C6D70A /* NTAppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 649C7DC817A1250200C6D70A /* NTAppDelegate.m */; };
 		649C7DCC17A1250200C6D70A /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 649C7DCA17A1250200C6D70A /* MainMenu.xib */; };
 		649C7DD317A138D600C6D70A /* Notes.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 649C7DD217A138D600C6D70A /* Notes.rtf */; };
+		64B4977C17C199C90011C72E /* copyfile.c in Sources */ = {isa = PBXBuildFile; fileRef = 64FAB79217C1977C007B713A /* copyfile.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,7 +40,8 @@
 		649C7DC817A1250200C6D70A /* NTAppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NTAppDelegate.m; sourceTree = "<group>"; };
 		649C7DCB17A1250200C6D70A /* en */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = en; path = en.lproj/MainMenu.xib; sourceTree = "<group>"; };
 		649C7DD217A138D600C6D70A /* Notes.rtf */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.rtf; path = Notes.rtf; sourceTree = "<group>"; };
-		64C5B8A817B9574F007693B8 /* copyfile.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = copyfile.c; sourceTree = "<group>"; };
+		64FAB79217C1977C007B713A /* copyfile.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = copyfile.c; sourceTree = "<group>"; };
+		64FAB79417C197BF007B713A /* quarantine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = quarantine.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -131,7 +133,8 @@
 			children = (
 				649C7DC317A1250200C6D70A /* CopyfileTestApp-Prefix.pch */,
 				649C7DC117A1250200C6D70A /* main.m */,
-				64C5B8A817B9574F007693B8 /* copyfile.c */,
+				64FAB79417C197BF007B713A /* quarantine.h */,
+				64FAB79217C1977C007B713A /* copyfile.c */,
 			);
 			name = "Supporting Files";
 			sourceTree = "<group>";
@@ -204,6 +207,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				649C7DC217A1250200C6D70A /* main.m in Sources */,
+				64B4977C17C199C90011C72E /* copyfile.c in Sources */,
 				649C7DC917A1250200C6D70A /* NTAppDelegate.m in Sources */,
 				643107A917A6AC74001D6567 /* NTFileOperation.m in Sources */,
 				6437FA1F17B81C5B0073BA88 /* NTProcessWindowController.m in Sources */,

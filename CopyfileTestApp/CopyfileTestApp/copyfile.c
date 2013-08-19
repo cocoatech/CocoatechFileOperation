@@ -46,13 +46,13 @@
 #include <fts.h>
 #include <libgen.h>
 
-#ifdef VOL_CAP_FMT_DECMPFS_COMPRESSION
+/* #ifdef VOL_CAP_FMT_DECMPFS_COMPRESSION
 # include <Kernel/sys/decmpfs.h>
-#endif
+#endif */
 
 #include <TargetConditionals.h>
 #if !TARGET_OS_EMBEDDED
-#include <quarantine.h>
+#include "quarantine.h"
 
 #define	XATTR_QUARANTINE_NAME qtn_xattr_name
 #else /* TARGET_OS_EMBEDDED */
@@ -204,7 +204,7 @@ sort_xattrname_list(void *start, size_t length)
 
 	tmp = ptrs[indx++] = (char*)start;
 
-	while (tmp = memchr(tmp, 0, ((char*)start + length) - tmp)) {
+	while ((tmp = memchr(tmp, 0, ((char*)start + length) - tmp))) {
 		if (indx == nel) {
 			nel += 10;
 			ptrs = realloc(ptrs, sizeof(char**) * nel);
@@ -1616,7 +1616,7 @@ static int copyfile_open(copyfile_state_t s)
 			copyfile_warn("Cannot open directory %s for reading", s->dst);
 			return -1;
 		}
-	} else while((s->dst_fd = open(s->dst, oflags | dsrc, s->sb.st_mode | S_IWUSR)) < 0)
+	} else while((s->dst_fd = open(s->dst, oflags | dsrc, s->sb.st_mode | S_IWUSR | S_IRUSR)) < 0)
 	{
 	    /*
 	     * We set S_IWUSR because fsetxattr does not -- at the time this comment
@@ -1781,8 +1781,7 @@ static int copyfile_data(copyfile_state_t s)
     int ret = 0;
     size_t iBlocksize = 0;
     size_t oBlocksize = 0;
-    const size_t onegig = 1 << 30;
-    struct statfs sfs;
+    const size_t mbytes64 = 1 << 26;
     copyfile_callback_t status = s->statuscb;
 
     /* Unless it's a normal file, we don't copy.  For now, anyway */
@@ -1800,29 +1799,19 @@ static int copyfile_data(copyfile_state_t s)
 	}
     }
 #endif
-	
-    if (fstatfs(s->src_fd, &sfs) == -1) {
-	iBlocksize = s->sb.st_blksize;
-    } else {
-	iBlocksize = sfs.f_iosize;
+    
+    iBlocksize = s->sb.st_size;
+    
+    /* Limit blocksize to 64M */
+    if (iBlocksize > mbytes64) {
+        iBlocksize = mbytes64;
     }
-
-    /* Work-around for 6453525, limit blocksize to 1G */
-    if (iBlocksize > onegig) {
-	iBlocksize = onegig;
-    }
-
-    if ((bp = malloc(iBlocksize)) == NULL)
-	return -1;
-
-    if (fstatfs(s->dst_fd, &sfs) == -1 || sfs.f_iosize == 0) {
+    
 	oBlocksize = iBlocksize;
-    } else {
-	oBlocksize = sfs.f_iosize;
-	if (oBlocksize > onegig)
-	    oBlocksize = onegig;
-    }
-
+    
+    if ((bp = malloc(iBlocksize)) == NULL)
+        return -1;
+    
     blen = iBlocksize;
 
     s->totalCopied = 0;
