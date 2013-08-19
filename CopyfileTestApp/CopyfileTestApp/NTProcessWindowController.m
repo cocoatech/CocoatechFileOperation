@@ -212,12 +212,15 @@
 {
     __block NTFileConflictResolution result = -1;
     
-    BOOL isSourceDir, isDestinationDir;
+    NSArray *keys = [NSArray arrayWithObjects:NSURLIsDirectoryKey, NSURLIsPackageKey, nil];
     
-    [[NSFileManager defaultManager] fileExistsAtPath:[aSrcURL path] isDirectory:&isSourceDir];
-    [[NSFileManager defaultManager] fileExistsAtPath:[aDstURL path] isDirectory:&isDestinationDir];
+    NSDictionary *srcProperties = [aSrcURL resourceValuesForKeys:keys error:NULL];
+    NSDictionary *dstProperties = [aDstURL resourceValuesForKeys:keys error:NULL];
     
-    BOOL areDirs = isSourceDir && isDestinationDir;
+    BOOL isSrcDir = [[srcProperties objectForKey:NSURLIsDirectoryKey] boolValue] && ![[srcProperties objectForKey:NSURLIsPackageKey] boolValue];
+    BOOL isDstDir = [[dstProperties objectForKey:NSURLIsDirectoryKey] boolValue] && ![[dstProperties objectForKey:NSURLIsPackageKey] boolValue];
+    
+    BOOL areDirs = isSrcDir && isDstDir;
     
     NSString *firstButton;
     NSString *secondButton;
@@ -241,12 +244,12 @@
     
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     
-    [alert setMessageText:[NSString stringWithFormat:@"%@ already exists!", (isDestinationDir ? @"Folder" : @"File")]];
+    [alert setMessageText:[NSString stringWithFormat:@"%@ already exists!", (isDstDir ? @"Folder" : @"File")]];
     
     if (isCopy)
-        [alert setInformativeText:[NSString stringWithFormat:@"You want to copy %@ \"%@\" but designated %@ \"%@\" already exists. Proposed new path is \"%@\". What do you want to do?", (isSourceDir ? @"folder" : @"file"), [aSrcURL path], (isDestinationDir ? @"folder" : @"file"), [aDstURL path], [*aPropURL path]]];
+        [alert setInformativeText:[NSString stringWithFormat:@"You want to copy %@ \"%@\" but designated %@ \"%@\" already exists. Proposed new path is \"%@\". What do you want to do?", (isSrcDir ? @"folder" : @"file"), [aSrcURL path], (isDstDir ? @"folder" : @"file"), [aDstURL path], [*aPropURL path]]];
     else
-        [alert setInformativeText:[NSString stringWithFormat:@"You want to move %@ \"%@\" but designated %@ \"%@\" already exists. Proposed new path is \"%@\". What do you want to do?", (isSourceDir ? @"folder" : @"file"), [aSrcURL path], (isDestinationDir ? @"folder" : @"file"), [aDstURL path], [*aPropURL path]]];
+        [alert setInformativeText:[NSString stringWithFormat:@"You want to move %@ \"%@\" but designated %@ \"%@\" already exists. Proposed new path is \"%@\". What do you want to do?", (isSrcDir ? @"folder" : @"file"), [aSrcURL path], (isDstDir ? @"folder" : @"file"), [aDstURL path], [*aPropURL path]]];
     
     [alert addButtonWithTitle:firstButton];
     [alert addButtonWithTitle:secondButton];
