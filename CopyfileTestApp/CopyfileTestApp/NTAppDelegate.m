@@ -49,16 +49,45 @@
     if (result == NSFileHandlingPanelOKButton)
     {
         BOOL isCopy = ([aSender tag] == 0);
-        NSOpenPanel *destinationPanel = [NSOpenPanel openPanel];
+        BOOL isMove = ([aSender tag] == 1);
+        BOOL isDelete = ([aSender tag] == -1);
         
-        [destinationPanel setCanChooseDirectories:YES];
-        [destinationPanel setAllowsMultipleSelection:NO];
-        [destinationPanel setTitle:@"Destination?"];
-        [destinationPanel setPrompt:isCopy ? @"Copy" : @"Move"];
-        
-        result = [destinationPanel runModal];
-        
-        if (result == NSFileHandlingPanelOKButton)
+        if (!isDelete)
+        {
+            NSOpenPanel *destinationPanel = [NSOpenPanel openPanel];
+            
+            [destinationPanel setCanChooseDirectories:YES];
+            [destinationPanel setAllowsMultipleSelection:NO];
+            [destinationPanel setTitle:@"Destination?"];
+            [destinationPanel setPrompt:isCopy ? @"Copy" : @"Move"];
+            
+            result = [destinationPanel runModal];
+            
+            if (result == NSFileHandlingPanelOKButton)
+            {
+                NTFileOperation *fileOperation = [[[NTFileOperation alloc] init] autorelease];
+                
+                [NTProcessWindowController showWindowForOperation:fileOperation];
+                
+                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^
+                {
+                    NSArray *srcURLs = [sourcePanel URLs];
+                    NSMutableArray *dstURLs = [NSMutableArray arrayWithCapacity:[srcURLs count]];
+                    
+                    for (NSURL *srcURL in srcURLs)
+                    {
+                        NSString *dstPath = [[[destinationPanel URL] path] stringByAppendingPathComponent:[srcURL lastPathComponent]];
+                        [dstURLs addObject:[NSURL fileURLWithPath:dstPath]];
+                    }
+                    
+                    if (isCopy)
+                        [fileOperation copyAsyncItemsAtURLs:[sourcePanel URLs] toURLs:dstURLs options:NTFileOperationDefaultOptions];
+                    else if (isMove)
+                        [fileOperation moveAsyncItemsAtURLs:[sourcePanel URLs] toURLs:dstURLs options:NTFileOperationDefaultOptions];
+                });
+            }
+        }
+        else
         {
             NTFileOperation *fileOperation = [[[NTFileOperation alloc] init] autorelease];
             
@@ -66,10 +95,7 @@
             
             dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^
             {
-                if (isCopy)
-                    [fileOperation copyAsyncItemsAtURLs:[sourcePanel URLs] toURL:[destinationPanel URL]];
-                else
-                    [fileOperation moveAsyncItemsAtURLs:[sourcePanel URLs] toURL:[destinationPanel URL]];
+                [fileOperation deleteAsyncItemsAtURLs:[sourcePanel URLs] options:NTFileOperationDefaultOptions];
             });
         }
     }

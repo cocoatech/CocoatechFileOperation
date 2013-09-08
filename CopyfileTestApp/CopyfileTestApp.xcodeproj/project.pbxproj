@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		643107A917A6AC74001D6567 /* NTFileOperation.m in Sources */ = {isa = PBXBuildFile; fileRef = 643107A817A6AC74001D6567 /* NTFileOperation.m */; };
 		6437FA1F17B81C5B0073BA88 /* NTProcessWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = 6437FA1D17B81C5B0073BA88 /* NTProcessWindowController.m */; };
 		6437FA2017B81C5B0073BA88 /* NTProcessWindow.xib in Resources */ = {isa = PBXBuildFile; fileRef = 6437FA1E17B81C5B0073BA88 /* NTProcessWindow.xib */; };
 		649C7DB617A1250200C6D70A /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 649C7DB517A1250200C6D70A /* Cocoa.framework */; };
@@ -17,12 +16,11 @@
 		649C7DC917A1250200C6D70A /* NTAppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 649C7DC817A1250200C6D70A /* NTAppDelegate.m */; };
 		649C7DCC17A1250200C6D70A /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 649C7DCA17A1250200C6D70A /* MainMenu.xib */; };
 		649C7DD317A138D600C6D70A /* Notes.rtf in Resources */ = {isa = PBXBuildFile; fileRef = 649C7DD217A138D600C6D70A /* Notes.rtf */; };
-		64B4977C17C199C90011C72E /* copyfile.c in Sources */ = {isa = PBXBuildFile; fileRef = 64FAB79217C1977C007B713A /* copyfile.c */; };
+		64D7074B17DC001F002FE6CF /* copyfile.c in Sources */ = {isa = PBXBuildFile; fileRef = 64D7074717DC001F002FE6CF /* copyfile.c */; };
+		64D7074C17DC001F002FE6CF /* NTFileOperation.m in Sources */ = {isa = PBXBuildFile; fileRef = 64D7074917DC001F002FE6CF /* NTFileOperation.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		643107A717A6AC74001D6567 /* NTFileOperation.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = NTFileOperation.h; sourceTree = "<group>"; };
-		643107A817A6AC74001D6567 /* NTFileOperation.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = NTFileOperation.m; sourceTree = "<group>"; };
 		6437FA1C17B81C5A0073BA88 /* NTProcessWindowController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = NTProcessWindowController.h; sourceTree = "<group>"; };
 		6437FA1D17B81C5B0073BA88 /* NTProcessWindowController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = NTProcessWindowController.m; sourceTree = "<group>"; };
 		6437FA1E17B81C5B0073BA88 /* NTProcessWindow.xib */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.xib; path = NTProcessWindow.xib; sourceTree = "<group>"; };
@@ -40,8 +38,10 @@
 		649C7DC817A1250200C6D70A /* NTAppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = NTAppDelegate.m; sourceTree = "<group>"; };
 		649C7DCB17A1250200C6D70A /* en */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = en; path = en.lproj/MainMenu.xib; sourceTree = "<group>"; };
 		649C7DD217A138D600C6D70A /* Notes.rtf */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.rtf; path = Notes.rtf; sourceTree = "<group>"; };
-		64FAB79217C1977C007B713A /* copyfile.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = copyfile.c; sourceTree = "<group>"; };
-		64FAB79417C197BF007B713A /* quarantine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = quarantine.h; sourceTree = "<group>"; };
+		64D7074717DC001F002FE6CF /* copyfile.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = copyfile.c; sourceTree = "<group>"; };
+		64D7074817DC001F002FE6CF /* NTFileOperation.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = NTFileOperation.h; sourceTree = "<group>"; };
+		64D7074917DC001F002FE6CF /* NTFileOperation.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = NTFileOperation.m; sourceTree = "<group>"; };
+		64D7074A17DC001F002FE6CF /* quarantine.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = quarantine.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,8 +71,8 @@
 		6439A30417B91E4700A12C92 /* File Operation */ = {
 			isa = PBXGroup;
 			children = (
-				643107A717A6AC74001D6567 /* NTFileOperation.h */,
-				643107A817A6AC74001D6567 /* NTFileOperation.m */,
+				64D7074817DC001F002FE6CF /* NTFileOperation.h */,
+				64D7074917DC001F002FE6CF /* NTFileOperation.m */,
 			);
 			name = "File Operation";
 			sourceTree = "<group>";
@@ -133,8 +133,8 @@
 			children = (
 				649C7DC317A1250200C6D70A /* CopyfileTestApp-Prefix.pch */,
 				649C7DC117A1250200C6D70A /* main.m */,
-				64FAB79417C197BF007B713A /* quarantine.h */,
-				64FAB79217C1977C007B713A /* copyfile.c */,
+				64D7074A17DC001F002FE6CF /* quarantine.h */,
+				64D7074717DC001F002FE6CF /* copyfile.c */,
 			);
 			name = "Supporting Files";
 			sourceTree = "<group>";
@@ -207,10 +207,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				649C7DC217A1250200C6D70A /* main.m in Sources */,
-				64B4977C17C199C90011C72E /* copyfile.c in Sources */,
 				649C7DC917A1250200C6D70A /* NTAppDelegate.m in Sources */,
-				643107A917A6AC74001D6567 /* NTFileOperation.m in Sources */,
 				6437FA1F17B81C5B0073BA88 /* NTProcessWindowController.m in Sources */,
+				64D7074B17DC001F002FE6CF /* copyfile.c in Sources */,
+				64D7074C17DC001F002FE6CF /* NTFileOperation.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

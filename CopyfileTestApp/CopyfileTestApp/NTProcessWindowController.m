@@ -68,23 +68,44 @@
 
 - (BOOL)fileOperation:(NTFileOperation *)anOperation shouldProceedOnProgressInfo:(NSDictionary *)theInfo
 {
+    NTFileOperationType type = [[theInfo objectForKey:NTFileOperationTypeKey] intValue];
     unsigned long long completedBytes = [[theInfo objectForKey:NTFileOperationCompletedBytesKey] unsignedLongLongValue];
     unsigned long long totalBytes = [[theInfo objectForKey:NTFileOperationTotalBytesKey] unsignedLongLongValue];
     unsigned long long completedObjects = [[theInfo objectForKey:NTFileOperationCompletedObjectsKey] unsignedLongLongValue];
     unsigned long long totalObjects = [[theInfo objectForKey:NTFileOperationTotalObjectsKey] unsignedLongLongValue];
     unsigned long long throughput = [[theInfo objectForKey:NTFileOperationThroughputKey] unsignedLongLongValue];
-    unsigned long long secondsRemaining = (throughput == 0) ? 0 : (totalBytes - completedBytes) / throughput;
+    
+    unsigned long long completed = 0;
+    unsigned long long total = 0;
+    
+    if (type == NTFileOperationTypeDelete)
+    {
+        completed = completedObjects;
+        total = totalObjects;        
+    }
+    else
+    {
+        completed = completedBytes;
+        total = totalBytes;
+    }
+    
+    unsigned long long secondsRemaining = (throughput == 0) ? 0 : (total - completed) / throughput;
     
     NTFileOperationStage stage = (NTFileOperationStage)[[theInfo objectForKey:NTFileOperationStageKey] unsignedIntegerValue];
     
-    NSString *sourceText = [NSString stringWithFormat:@"Source: %@", [[theInfo objectForKey:NTFileOperationSourceItemKey] path]];
-    NSString *destinationText = [NSString stringWithFormat:@"Destination: %@", [[theInfo objectForKey:NTFileOperationDestinationItemKey] path]];
+    NSString *sourceText = [NSString stringWithFormat:@"Source: %@", [theInfo objectForKey:NTFileOperationSourceItemPathKey]];
+    NSString *destinationText = [NSString stringWithFormat:@"Destination: %@", [theInfo objectForKey:NTFileOperationDestinationItemPathKey]];
     NSString *infoText = @"";
     
     if (stage == NTFileOperationStagePreflighting)
         infoText = [NSString stringWithFormat:@"Preparing to process %llu items.", totalObjects];
     else if (stage == NTFileOperationStageRunning)
-        infoText = [NSString stringWithFormat:@"Processing %@ of %@ (%llu of %llu items). Speed %@/s, %llu sec. remainig.", [self byteStringForBytes:completedBytes], [self byteStringForBytes:totalBytes], completedObjects, totalObjects, [self byteStringForBytes:throughput], secondsRemaining];
+    {
+        if (type == NTFileOperationTypeDelete)
+            infoText = [NSString stringWithFormat:@"Processing %llu of %llu items. %llu sec. remainig.", completedObjects, totalObjects, secondsRemaining];
+        else
+            infoText = [NSString stringWithFormat:@"Processing %@ of %@ (%llu of %llu items). Speed %@/s, %llu sec. remainig.", [self byteStringForBytes:completedBytes], [self byteStringForBytes:totalBytes], completedObjects, totalObjects, [self byteStringForBytes:throughput], secondsRemaining];
+    }
     
     dispatch_async(dispatch_get_main_queue(), ^
     {
@@ -104,7 +125,7 @@
                 [[self progressIndicator] setIndeterminate:NO];
             }
             
-            [[self progressIndicator] setDoubleValue:((double)completedBytes / (double)totalBytes) * 100.0];
+            [[self progressIndicator] setDoubleValue:((double)completed / (double)total) * 100.0];
             
             [[self sourceTextField] setStringValue:sourceText];
             [[self destinationTextField] setStringValue:destinationText];
@@ -129,9 +150,9 @@
     return [self fileOperation:anOperation conflictProcessingItemAtURL:aSrcURL toURL:aDstURL proposedURL:aPropURL isCopy:NO];
 }
 
-- (BOOL)fileOperation:(NTFileOperation *)anOperation shouldProceedAfterError:(NSError *)anError preflightingItemAtURL:(NSURL *)aSrcURL
+- (BOOL)fileOperation:(NTFileOperation *)anOperation shouldProceedAfterError:(NSError *)anError preflightingItemAtURL:(NSURL *)aSrcURL toURL:(NSURL *)aDstURL
 {
-    return [self fileOperation:anOperation shouldProceedAfterError:anError processingItemAtURL:aSrcURL toURL:nil];
+    return [self fileOperation:anOperation shouldProceedAfterError:anError processingItemAtURL:aSrcURL toURL:aDstURL];
 }
 
 - (BOOL)fileOperation:(NTFileOperation *)anOperation shouldProceedAfterError:(NSError *)anError copyingItemAtURL:(NSURL *)aSrcURL toURL:(NSURL *)aDstURL
@@ -142,6 +163,11 @@
 - (BOOL)fileOperation:(NTFileOperation *)anOperation shouldProceedAfterError:(NSError *)anError movingItemAtURL:(NSURL *)aSrcURL toURL:(NSURL *)aDstURL
 {
     return [self fileOperation:anOperation shouldProceedAfterError:anError processingItemAtURL:aSrcURL toURL:aDstURL];
+}
+
+- (BOOL)fileOperation:(NTFileOperation *)anOperation shouldProceedAfterError:(NSError *)anError deletingItemAtURL:(NSURL *)aSrcURL
+{
+    return [self fileOperation:anOperation shouldProceedAfterError:anError processingItemAtURL:aSrcURL toURL:nil];
 }
 
 - (void)conflictAlertDidEnd:(NSAlert *)anAlert returnCode:(NSInteger)aReturnCode contextInfo:(void *)aContextInfo
@@ -274,7 +300,7 @@
     __block int result = -1;
     
     NSAlert *alert = [NSAlert alertWithError:anError];
-    [alert setInformativeText:[NSString stringWithFormat:@"%@", [anError localizedFailureReason]]];
+    [alert setInformativeText:[NSString stringWithFormat:@"%@", [[[anError userInfo] objectForKey:NTFileOperationErrorURLKey] path]]];
     
     dispatch_async(dispatch_get_main_queue(), ^
     {
